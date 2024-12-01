@@ -1,0 +1,59 @@
+env: "dev"
+log_level: "debug"
+log_type: "text" # 'text' or 'json'. Text type has colorized error levels
+service_name: "url-scrape-worker"
+port: "8080"
+version: "0.0.1"
+
+worker:
+  max_workers: 8 # The number of goroutines that will be launched for scraping
+  scrape_mechanism: 0 # 0 -'curl', 1 - 'headless browser'
+  scrape_timeout: "30s" # The maximum time to wait for the page to scrape
+  retry_attempts: 3 # The number of attempts to scrape the page if 429 status code is received.
+  retry_delay: "3s" # The delay between retries. The number will increase exponentially. Not depends on scrape_timeout
+  user_agent: "url-scrape-worker/0.0.1"
+
+cache:
+  servers: "cache:11211"
+  ttl_for_scrape: "24h"
+
+database:
+  host: "mysql"
+  port: "3306"
+  user: "admin"
+  password: "-"
+  name: "url_scraper"
+  conn_max_lifetime: "10m"
+  max_open_conns: 10
+  max_idle_conns: 10
+
+s3:
+  aws_access_key: "test" # enter 'test' before running docker-compose for debugging
+  aws_secret_key: "test"
+  aws_base_endpoint: "http://localstack:4566" # Empty string has no effect. Mostly used for testing (LocalStack)
+  region: "us-east-1"
+  bucket_name: "url-scrape-worker"
+  key_prefix: "scrape-worker/version=1"
+
+kafka:
+  producer:
+    addr: "kafka:9092"
+    write_topic_name: "classify-work-kafka-topic"
+    max_attempts: 3 # Number of attempts to send a message to Kafka
+    batch_size: 100 # Number of messages to batch before sending to Kafka
+    batch_timeout: "2s" # The time after which messages will be sent to Kafka, even if the batch_size has not been reached (has custom implementation)
+    read_timeout: "10s"
+    write_timeout: "10s"
+    required_acks: 1 # Number of acknowledges: 0 - fire-and-forget, 1 - wait for the leader, -1 - wait for all
+    async: false # If true - no guarantees of whether the messages were written to Kafka
+  consumer:
+    brokers: "kafka:9092"
+    read_topic_name: "scrape-work-kafka-topic"
+    group_id: "scrape-work-kafka-group"
+    max_wait: "500ms" # Maximum amount of time to wait for new data to come
+    read_batch_timeout: "1s"
+
+crawler: # common-crawl starts sending 5xx errors when exceeding some thresholds
+  request_timeout: 30 # in seconds
+  retries: 1
+  last_crawl_indexes: 5 # number of the newest indexes where the URL search will be performed. Max 106 (2024.11.22)

@@ -1,0 +1,98 @@
+services:
+  scrape-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GOLANG_VERSION: 1.23
+        GITHUB_ACCESS_TOKEN: ${GITHUB_ACCESS_TOKEN}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - mysql
+      - cache
+      - kafka
+      - localstack
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_USER: admin
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: url_scraper
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./database/migration/2024-11-04__init.sql:/docker-entrypoint-initdb.d/2024-11-04__init.sql
+
+  cache:
+    image: memcached:1.6
+    ports:
+      - "11211:11211"
+
+  zookeeper:
+    hostname: zookeeper
+    image: confluentinc/cp-zookeeper:7.7.1
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    hostname: kafka
+    image: confluentinc/cp-kafka:7.7.1
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: OUTSIDE://kafka:9092,INSIDE://kafka:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: OUTSIDE:PLAINTEXT,INSIDE:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INSIDE
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    depends_on:
+      - zookeeper
+
+  init-kafka:
+    image: confluentinc/cp-kafka:7.7.1
+    entrypoint: [ '/bin/sh', '-c' ]
+    command: |
+      "
+      # blocks until kafka is reachable
+      kafka-topics --bootstrap-server kafka:19092 --list
+      echo -e 'Creating kafka topics'
+      kafka-topics --bootstrap-server kafka:19092 --create --if-not-exists --topic scrape-work-kafka-topic --replication-factor 1 --partitions 1
+      kafka-topics --bootstrap-server kafka:19092 --create --if-not-exists --topic classify-work-kafka-topic --replication-factor 1 --partitions 1
+      echo -e 'Successfully created the following topics:'
+      kafka-topics --bootstrap-server kafka:19092 --list
+      "
+    depends_on:
+      - kafka
+
+  localstack:
+    image: localstack/localstack:latest
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=s3
+      - DEBUG=1
+      - AWS_DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  create-resources:
+    restart: "no"
+    image: amazon/aws-cli:latest
+    depends_on:
+      localstack:
+        condition: service_healthy
+    environment:
+      - AWS_DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    entrypoint: [ "sh", "-c" ]
+    command: [ "aws --endpoint-url=http://localstack:4566 s3api create-bucket --bucket context-scrape-worker --region us-east-1" ]
