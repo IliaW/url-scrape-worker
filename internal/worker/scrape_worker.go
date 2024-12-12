@@ -58,9 +58,13 @@ func (w *ScrapeWorker) Run() {
 			if err != nil {
 				w.Log.Error("scraping failed.", slog.String("err", err.Error()))
 				continue
+				// TODO: action for failed scrapes?
+				// 1. Kafka topic for failed scrapes,
+				// 2. Use CommonCrawl or
+				// 3. Skip?
 			}
 			// Retries with exponential backoff for 429 status code
-			for retry, delay := w.Cfg.WorkerSetting.RetryAttempts, w.Cfg.WorkerSetting.RetryDelay; scrape.StatusCode ==
+			for retry, delay := w.Cfg.WorkerSettings.RetryAttempts, w.Cfg.WorkerSettings.RetryDelay; scrape.StatusCode ==
 				http.StatusTooManyRequests && retry > 0; retry, delay = retry-1, delay*2 {
 				w.Log.Warn("too many requests status code. retrying...", slog.Int("attempts left", retry))
 				time.Sleep(delay)
@@ -85,6 +89,7 @@ func (w *ScrapeWorker) Run() {
 	}
 }
 
+// TODO: should we stop saving and sending a scrape to kafka if writing to S3 will fail?
 func (w *ScrapeWorker) saveScrape(scrape *model.Scrape) {
 	w.Cache.DecrementThreshold(scrape.FullURL) // Decrease threshold for the url in Cache
 	link := w.S3.WriteScrape(scrape)           // Save to S3
@@ -104,12 +109,13 @@ func (w *ScrapeWorker) scrapeUrl(s *model.Scrape) (*model.Scrape, error) {
 	}
 }
 
+// scrapeWithCurl copied from the Umbrella project for compatibility
 func (w *ScrapeWorker) scrapeWithCurl(scrape *model.Scrape) (*model.Scrape, error) {
 	scrape.ScrapeMechanism = w.ScrapeMechanism.String()
 
 	c := colly.NewCollector()
-	c.SetRequestTimeout(w.Cfg.WorkerSetting.ScrapeTimeout)
-	c.UserAgent = w.Cfg.WorkerSetting.UserAgent
+	c.SetRequestTimeout(w.Cfg.WorkerSettings.ScrapeTimeout)
+	c.UserAgent = w.Cfg.WorkerSettings.UserAgent
 
 	c.OnResponse(func(resp *colly.Response) {
 		scrape.FullHTML = string(resp.Body)
@@ -121,7 +127,11 @@ func (w *ScrapeWorker) scrapeWithCurl(scrape *model.Scrape) (*model.Scrape, erro
 
 	c.OnError(func(r *colly.Response, err error) {
 		scrape.StatusCode = -1
-		scrape.Status = err.Error()
+		if len(err.Error()) > 1000 {
+			scrape.Status = err.Error()[:1000]
+		} else {
+			scrape.Status = err.Error()
+		}
 	})
 
 	if !strings.HasPrefix(scrape.FullURL, "http://") && !strings.HasPrefix(scrape.FullURL, "https://") {
@@ -146,7 +156,7 @@ func (w *ScrapeWorker) scrapeWithBrowser(scrape *model.Scrape) (*model.Scrape, e
 	responseHeaders := make(map[string]interface{}, 20)
 	scrape.ScrapeMechanism = w.ScrapeMechanism.String()
 
-	tCtx, cancelTCtx := context.WithTimeout(context.Background(), w.Cfg.WorkerSetting.ScrapeTimeout)
+	tCtx, cancelTCtx := context.WithTimeout(context.Background(), w.Cfg.WorkerSettings.ScrapeTimeout)
 	defer cancelTCtx()
 	ctx, cancel := chromedp.NewContext(tCtx)
 	defer cancel()
@@ -157,7 +167,11 @@ func (w *ScrapeWorker) scrapeWithBrowser(scrape *model.Scrape) (*model.Scrape, e
 			response := responseReceivedEvent.Response
 			if response.URL == scrape.FullURL {
 				scrape.StatusCode = int(response.Status)
-				scrape.Status = http.StatusText(scrape.StatusCode)
+				if len(response.StatusText) > 1000 {
+					scrape.Status = response.StatusText[:1000]
+				} else {
+					scrape.Status = response.StatusText
+				}
 				responseHeaders = response.Headers
 			}
 		case *network.EventRequestWillBeSent:
@@ -173,7 +187,7 @@ func (w *ScrapeWorker) scrapeWithBrowser(scrape *model.Scrape) (*model.Scrape, e
 		chromedp.Tasks{
 			network.Enable(),
 			network.SetExtraHTTPHeaders(map[string]interface{}{
-				"User-Agent": w.Cfg.WorkerSetting.UserAgent,
+				"User-Agent": w.Cfg.WorkerSettings.UserAgent,
 			}),
 			enableLifeCycleEvents(),
 			navigateAndWaitFor(scrape.FullURL, "networkIdle"),
@@ -188,8 +202,8 @@ func (w *ScrapeWorker) scrapeWithBrowser(scrape *model.Scrape) (*model.Scrape, e
 			return err
 		}),
 	)
-	if responseHeaders["etag"] != nil {
-		scrape.ETag = responseHeaders["etag"].(string)
+	if responseHeaders["ETag"] != nil {
+		scrape.ETag = responseHeaders["ETag"].(string)
 	}
 	scrape.TimeToScrape = time.Since(startTime).Milliseconds()
 

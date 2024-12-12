@@ -1,17 +1,20 @@
-env: "dev"
+env: "test" # 'test' will use the Localstack for S3
 log_level: "debug"
 log_type: "text" # 'text' or 'json'. Text type has colorized error levels
 service_name: "url-scrape-worker"
 port: "8080"
 version: "0.0.1"
+url_chan_size: 100 # The size of the buffered channel for Kafka Consumer messages
+scrape_chan_size: 100 # The size of the buffered channel for Kafka Producer messages
+restart_timeout: "1m" # Timeout to avoid polluting logs if something unrecoverable happened and panic occurred
 
 worker:
-  max_workers: 8 # The number of goroutines that will be launched for scraping
+  workers_limit: 24 # Launch runtime.NumCPU() workers by default. Limit the max workers count or set -1 to disable the setting. See https://github.com/golang/go/issues/65064
   scrape_mechanism: 0 # 0 -'curl', 1 - 'headless browser'
   scrape_timeout: "30s" # The maximum time to wait for the page to scrape
   retry_attempts: 3 # The number of attempts to scrape the page if 429 status code is received.
   retry_delay: "3s" # The delay between retries. The number will increase exponentially. Not depends on scrape_timeout
-  user_agent: "url-scrape-worker/0.0.1"
+  user_agent: "magnite-scrape-worker-bot"
 
 cache:
   servers: "cache:11211"
@@ -21,8 +24,8 @@ database:
   host: "mysql"
   port: "3306"
   user: "admin"
-  password: "-"
-  name: "url_scraper"
+  password: "test"
+  name: "distributed_scraper"
   conn_max_lifetime: "10m"
   max_open_conns: 10
   max_idle_conns: 10
@@ -30,9 +33,12 @@ database:
 s3:
   aws_access_key: "test" # enter 'test' before running docker-compose for debugging
   aws_secret_key: "test"
+  aws_session_token: ""
   aws_base_endpoint: "http://localstack:4566" # Empty string has no effect. Mostly used for testing (LocalStack)
+  role_arn: "arn:aws:iam::000:role/test"
+  role_session_name: "aud-context-scrape-worker"
   region: "us-east-1"
-  bucket_name: "url-scrape-worker"
+  bucket_name: "aud-context-scrape-worker"
   key_prefix: "scrape-worker/version=1"
 
 kafka:

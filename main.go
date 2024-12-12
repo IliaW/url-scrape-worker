@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -43,21 +44,22 @@ func main() {
 	log = setupLogger()
 	db = setupDatabase()
 	defer closeDatabase()
-	s3 = aws_s3.NewS3BucketClient(cfg.S3Settings, log)
+	s3 = aws_s3.NewS3BucketClient(cfg, log)
 	cache = cacheClient.NewMemcachedClient(cfg.CacheSettings, log)
 	defer cache.Close()
 	crawl = crawler.NewCrawlService(cfg.CrawlerSettings, log)
 	metadataRepo = persistence.NewMetadataRepository(db, log)
-	scrapeMechanism := model.ScrapeMechanism(cfg.WorkerSetting.ScrapeMechanism)
+	scrapeMechanism := model.ScrapeMechanism(cfg.WorkerSettings.ScrapeMechanism)
 	log.Info("starting application on port "+cfg.Port, slog.String("env", cfg.Env))
 
-	urlChan := make(chan *model.ScrapeTask, 100) // TODO: Benchmark tests are required to configure the buffer size
-	scrapeChan := make(chan *model.Scrape, 100)
-	panicChan := make(chan struct{}, cfg.WorkerSetting.MaxWorkers)
+	urlChan := make(chan *model.ScrapeTask, cfg.UrlChanSize)
+	scrapeChan := make(chan *model.Scrape, cfg.ScrapeChanSize)
+	panicChan := make(chan struct{}, parallelWorkersCount())
 
 	kafkaWg := &sync.WaitGroup{}
 	kafkaWg.Add(1)
-	go broker.NewKafkaConsumer(ctx, kafkaWg, urlChan, log, cfg.KafkaSettings.Consumer)
+	kafkaConsumer := broker.NewKafkaConsumer(urlChan, cfg.KafkaSettings.Consumer, log, kafkaWg)
+	go kafkaConsumer.Run(ctx)
 
 	workerWg := &sync.WaitGroup{}
 	scrapeWorker := &worker.ScrapeWorker{
@@ -73,7 +75,8 @@ func main() {
 		Wg:              workerWg,
 		ScrapeMechanism: scrapeMechanism,
 	}
-	for i := 0; i < cfg.WorkerSetting.MaxWorkers; i++ {
+
+	for i := 0; i < parallelWorkersCount(); i++ {
 		workerWg.Add(1)
 		go scrapeWorker.Run()
 	}
@@ -82,25 +85,27 @@ func main() {
 		for range panicChan {
 			workerWg.Add(1)
 			go scrapeWorker.Run()
-			time.Sleep(3 * time.Minute) // timeout to avoid polluting logs if something unrecoverable happened
+			time.Sleep(cfg.RestartTimeout) // timeout to avoid polluting logs if something unrecoverable happened
 		}
 	}()
 
 	kafkaWg.Add(1)
-	go broker.NewKafkaProducer(kafkaWg, scrapeChan, log, cfg.KafkaSettings.Producer)
+	kafkaProducer := broker.NewKafkaProducer(scrapeChan, cfg.KafkaSettings.Producer, log, kafkaWg)
+	go kafkaProducer.Run()
 
 	// Graceful shutdown.
 	// 1. Stop Kafka Consumer by system call. Close urlChan
 	// 2. Wait till all Workers processed all messages from urlChan. Close scrapeChan
-	// 3. Wait till Producer process all messages from scrapeChan and write to kafka
-	// 4. Stop Kafka Producer. Close database and memcached connections
+	// 3. Wait till Producer process all messages from scrapeChan and write to Kafka.
+	// 4. Stop Kafka Producer
+	// 5. Close database and memcached connections
 	<-ctx.Done()
 	log.Info("stopping server...")
 	workerWg.Wait()
-	close(scrapeChan)
-	log.Info("close scrapeChan.")
 	close(panicChan)
 	log.Info("close panicChan.")
+	close(scrapeChan)
+	log.Info("close scrapeChan.")
 	kafkaWg.Wait()
 }
 
@@ -192,4 +197,17 @@ func closeDatabase() {
 	if err != nil {
 		log.Error("failed to close database connection.", slog.String("err", err.Error()))
 	}
+}
+
+// Limit to 24 if the number of CPUs is bigger. See epoll issue https://github.com/golang/go/issues/65064
+func parallelWorkersCount() int {
+	limit := cfg.WorkerSettings.WorkersLimit
+	numCPU := runtime.NumCPU()
+	if limit == -1 {
+		return numCPU
+	}
+	if numCPU > limit {
+		return limit
+	}
+	return numCPU
 }

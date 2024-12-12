@@ -16,7 +16,10 @@ type Config struct {
 	ServiceName     string          `mapstructure:"service_name"`
 	Port            string          `mapstructure:"port"`
 	Version         string          `mapstructure:"version"`
-	WorkerSetting   *WorkerConfig   `mapstructure:"worker"`
+	UrlChanSize     int             `mapstructure:"url_chan_size"`
+	ScrapeChanSize  int             `mapstructure:"scrape_chan_size"`
+	RestartTimeout  time.Duration   `mapstructure:"restart_timeout"`
+	WorkerSettings  *WorkerConfig   `mapstructure:"worker"`
 	CacheSettings   *CacheConfig    `mapstructure:"cache"`
 	DbSettings      *DatabaseConfig `mapstructure:"database"`
 	KafkaSettings   *KafkaConfig    `mapstructure:"kafka"`
@@ -25,7 +28,7 @@ type Config struct {
 }
 
 type WorkerConfig struct {
-	MaxWorkers      int           `mapstructure:"max_workers"`
+	WorkersLimit    int           `mapstructure:"workers_limit"`
 	ScrapeMechanism int           `mapstructure:"scrape_mechanism"`
 	ScrapeTimeout   time.Duration `mapstructure:"scrape_timeout"`
 	RetryAttempts   int           `mapstructure:"retry_attempts"`
@@ -77,7 +80,10 @@ type ConsumerConfig struct {
 type S3Config struct {
 	AwsAccessKey    string `mapstructure:"aws_access_key"`
 	AwsSecretKey    string `mapstructure:"aws_secret_key"`
+	AwsSessionToken string `mapstructure:"aws_session_token"`
 	AwsBaseEndpoint string `mapstructure:"aws_base_endpoint"`
+	RoleArn         string `mapstructure:"role_arn"`
+	RoleSessionName string `mapstructure:"role_session_name"`
 	Region          string `mapstructure:"region"`
 	BucketName      string `mapstructure:"bucket_name"`
 	KeyPrefix       string `mapstructure:"key_prefix"`

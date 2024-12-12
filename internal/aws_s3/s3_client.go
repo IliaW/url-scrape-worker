@@ -12,9 +12,11 @@ import (
 
 	"github.com/IliaW/url-scrape-worker/config"
 	"github.com/IliaW/url-scrape-worker/internal/model"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsCfg "github.com/aws/aws-sdk-go-v2/config"
 	crd "github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
 type BucketClient interface {
@@ -27,35 +29,58 @@ type S3BucketClient struct {
 	log    *slog.Logger
 }
 
-func NewS3BucketClient(cfg *config.S3Config, log *slog.Logger) *S3BucketClient {
+func NewS3BucketClient(cfg *config.Config, log *slog.Logger) *S3BucketClient {
 	log.Info("connecting to s3...")
 	ctx := context.Background()
 
-	sqsConfig, err := awsCfg.LoadDefaultConfig(ctx,
-		awsCfg.WithCredentialsProvider(crd.NewStaticCredentialsProvider(cfg.AwsAccessKey, cfg.AwsSecretKey, "")),
-		awsCfg.WithRegion(cfg.Region),
-		awsCfg.WithBaseEndpoint(cfg.AwsBaseEndpoint))
+	s3Config, err := awsCfg.LoadDefaultConfig(ctx, awsCfg.WithCredentialsProvider(crd.NewStaticCredentialsProvider(
+		cfg.S3Settings.AwsAccessKey,
+		cfg.S3Settings.AwsSecretKey,
+		cfg.S3Settings.AwsSessionToken)),
+		awsCfg.WithRegion(cfg.S3Settings.Region),
+		awsCfg.WithBaseEndpoint(cfg.S3Settings.AwsBaseEndpoint))
 	if err != nil {
 		log.Error("failed to load s3 config.", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
 
+	if cfg.S3Settings.RoleArn != "" && cfg.Env != "test" {
+		stsClient := sts.NewFromConfig(s3Config)
+		role, err := stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
+			RoleArn:         aws.String(cfg.S3Settings.RoleArn),
+			RoleSessionName: aws.String(cfg.S3Settings.RoleSessionName),
+		})
+		if err != nil {
+			log.Error("failed to assume role.", slog.String("err", err.Error()))
+			os.Exit(1)
+		}
+
+		s3Config, err = awsCfg.LoadDefaultConfig(ctx,
+			awsCfg.WithCredentialsProvider(crd.NewStaticCredentialsProvider(
+				*role.Credentials.AccessKeyId,
+				*role.Credentials.SecretAccessKey,
+				*role.Credentials.SessionToken),
+			),
+			awsCfg.WithRegion(cfg.S3Settings.Region))
+	}
+
 	// LocalStack does not support `virtual host addressing style` that uses s3 by default.
 	// For test purposes use configuration with disabled 'virtual hosted bucket addressing'.
+	// Set 'test' Env variable to use this configuration.
 	var s3client *s3.Client
-	if cfg.AwsAccessKey == "test" {
+	if cfg.Env == "test" {
 		log.Warn("test configuration for s3")
-		s3client = s3.NewFromConfig(sqsConfig, func(o *s3.Options) {
+		s3client = s3.NewFromConfig(s3Config, func(o *s3.Options) {
 			o.UsePathStyle = true
 		})
 	} else {
-		s3client = s3.NewFromConfig(sqsConfig)
+		s3client = s3.NewFromConfig(s3Config)
 	}
 	log.Info("connected to s3")
 
 	return &S3BucketClient{
 		client: s3client,
-		cfg:    cfg,
+		cfg:    cfg.S3Settings,
 		log:    log,
 	}
 }

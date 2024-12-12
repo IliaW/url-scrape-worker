@@ -31,6 +31,7 @@ type CommonCrawlerService struct {
 	localCache *cache.Cache
 }
 
+// NewCrawlService has small request limitations.
 func NewCrawlService(cfg *config.CrawlerConfig, log *slog.Logger) *CommonCrawlerService {
 	c, err := commoncrawl.New(cfg.RequestTimeout, cfg.Retries)
 	if err != nil {
@@ -40,7 +41,7 @@ func NewCrawlService(cfg *config.CrawlerConfig, log *slog.Logger) *CommonCrawler
 		crawler:    c,
 		cfg:        cfg,
 		log:        log,
-		localCache: cache.New(72*time.Hour, 72*time.Hour), // indexes update every month
+		localCache: cache.New(72*time.Hour, 72*time.Hour), // CommonCrawl indexes update every month
 	}
 }
 
@@ -116,7 +117,7 @@ func (c *CommonCrawlerService) getIndexes() ([]Index, error) {
 }
 
 func extractEtag(body *string) string {
-	r := regexp.MustCompile(`(?i)Etag:\s*"([^"]+)"`)
+	r := regexp.MustCompile(`(?i)ETag:\s*"([^"]+)"`)
 	match := r.FindStringSubmatch(*body)
 
 	if len(match) > 1 {

@@ -3,9 +3,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        GOLANG_VERSION: 1.23
-        GITHUB_ACCESS_TOKEN: ${GITHUB_ACCESS_TOKEN}
     ports:
       - "8080:8080"
     depends_on:
@@ -95,4 +92,4 @@ services:
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
     entrypoint: [ "sh", "-c" ]
-    command: [ "aws --endpoint-url=http://localstack:4566 s3api create-bucket --bucket context-scrape-worker --region us-east-1" ]
+    command: [ "aws --endpoint-url=http://localstack:4566 s3api create-bucket --bucket url-scrape-worker --region us-east-1" ]

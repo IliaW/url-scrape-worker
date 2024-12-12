@@ -31,14 +31,20 @@ type MemcachedClient struct {
 
 func NewMemcachedClient(cacheConfig *config.CacheConfig, log *slog.Logger) *MemcachedClient {
 	log.Info("connecting to memcached...")
+	ss := new(memcache.ServerList)
 	servers := strings.Split(cacheConfig.Servers, ",")
+	err := ss.SetServers(servers...)
+	if err != nil {
+		log.Error("failed to set memcached servers.", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
 	c := &MemcachedClient{
-		client: memcache.New(servers...),
+		client: memcache.NewFromSelector(ss),
 		cfg:    cacheConfig,
 		log:    log,
 	}
 	c.log.Info("pinging the memcached.")
-	err := c.client.Ping()
+	err = c.client.Ping()
 	if err != nil {
 		log.Error("connection to the memcached is failed.", slog.String("err", err.Error()))
 		os.Exit(1)
