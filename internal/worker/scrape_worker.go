@@ -58,10 +58,6 @@ func (w *ScrapeWorker) Run() {
 			if err != nil {
 				w.Log.Error("scraping failed.", slog.String("err", err.Error()))
 				continue
-				// TODO: action for failed scrapes?
-				// 1. Kafka topic for failed scrapes,
-				// 2. Use CommonCrawl or
-				// 3. Skip?
 			}
 			// Retries with exponential backoff for 429 status code
 			for retry, delay := w.Cfg.WorkerSettings.RetryAttempts, w.Cfg.WorkerSettings.RetryDelay; scrape.StatusCode ==
@@ -89,7 +85,6 @@ func (w *ScrapeWorker) Run() {
 	}
 }
 
-// TODO: should we stop saving and sending a scrape to kafka if writing to S3 will fail?
 func (w *ScrapeWorker) saveScrape(scrape *model.Scrape) {
 	w.Cache.DecrementThreshold(scrape.FullURL) // Decrease threshold for the url in Cache
 	link := w.S3.WriteScrape(scrape)           // Save to S3
@@ -109,7 +104,6 @@ func (w *ScrapeWorker) scrapeUrl(s *model.Scrape) (*model.Scrape, error) {
 	}
 }
 
-// scrapeWithCurl copied from the Umbrella project for compatibility
 func (w *ScrapeWorker) scrapeWithCurl(scrape *model.Scrape) (*model.Scrape, error) {
 	scrape.ScrapeMechanism = w.ScrapeMechanism.String()
 
